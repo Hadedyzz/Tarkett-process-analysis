@@ -203,8 +203,9 @@ def select_kept_timestamps_for_param(
     spike_threshold_factor: float = 2.0,
     eps_dynamic: float = 0.01,
     eps_static: float = 0.05,
-    max_flat_duration_minutes: int = 20,
+    max_flat_duration_minutes: int = 15,
 ):
+
     if df_param_raw.empty:
         return np.array([], dtype="datetime64[ns]")
 
@@ -218,8 +219,7 @@ def select_kept_timestamps_for_param(
     t = t[mask_valid]
 
     n = len(v)
-    if n <= max_points:
-        return t
+
 
     # -----------------------------
     # 1) Spike detection (existing)
@@ -307,24 +307,28 @@ def build_aligned_pivot(
     """
     1) For each parameter: select subset of original timestamps (value-based downsampling)
     2) Build unified timestamp index (union of all kept timestamps)
-    3) For each param: read values from RAW at those timestamps (no fill)
+    3) For each param: INTERPOLATE from its *downsampled* anchors to the unified timestamps
     4) Return:
        - aligned_pivot: DataFrame index=timestamp, columns=params
-       - downsample_stats: dict with raw_count, down_count, reduction
+    Note: Downsampling statistics have been removed.
     """
+
     aligned_pivot = pd.DataFrame()
 
     if data.empty or not applied_parameters:
         return aligned_pivot
 
-    kept_ts_per_param = {}
+    kept_ts_per_param = {}     # timestamps after downsamping
+    kept_vals_per_param = {}   # values at those timestamps
 
-    # --- 1) select kept timestamps per param ---
+    # -----------------------------------------------------------
+    # 1) DOWNSAMPLING PER PARAMETER
+    # -----------------------------------------------------------
     for param in applied_parameters:
+
         df_param_raw = data[data["Characteristic designation"] == param][
             ["Measured value from", "Measured value"]
         ]
-
 
         kept_ts = select_kept_timestamps_for_param(
             df_param_raw,
@@ -333,11 +337,20 @@ def build_aligned_pivot(
             spike_threshold_factor=ts_config["spike_threshold_factor"],
         )
 
+        # convert to datetime64 if needed
+        kept_ts = np.array(kept_ts, dtype="datetime64[ns]")
         kept_ts_per_param[param] = kept_ts
 
+        # get the values at those timestamps
+        if len(kept_ts) > 0:
+            df_ds = df_param_raw.set_index("Measured value from").loc[kept_ts]
+            kept_vals_per_param[param] = df_ds["Measured value"].to_numpy()
+        else:
+            kept_vals_per_param[param] = np.array([])
 
-
-    # --- 2) build unified timestamps ---
+    # -----------------------------------------------------------
+    # 2) BUILD UNIFIED TIMESTAMPS
+    # -----------------------------------------------------------
     all_ts = [ts_arr for ts_arr in kept_ts_per_param.values() if ts_arr.size > 0]
     if not all_ts:
         return aligned_pivot
@@ -345,27 +358,43 @@ def build_aligned_pivot(
     unified_timestamps = np.unique(np.concatenate(all_ts))
     unified_timestamps = np.sort(unified_timestamps)
 
-    # --- 3) for each param: reindex raw series on unified timestamps (no fill) ---
+    # -----------------------------------------------------------
+    # 3) INTERPOLATION ON UNIFIED TIMELINE
+    # -----------------------------------------------------------
     cols = {}
-    for param in applied_parameters:
-        df_param_raw = data[data["Characteristic designation"] == param][
-            ["Measured value from", "Measured value"]
-        ].copy()
 
-        if df_param_raw.empty:
+    # convert unified timestamps to numeric for interpolation
+    unified_numeric = unified_timestamps.astype("datetime64[ns]").astype(float)
+
+    for param in applied_parameters:
+
+        t_ds = kept_ts_per_param[param]
+        v_ds = kept_vals_per_param[param]
+
+        if len(t_ds) == 0:
             continue
 
-        df_param_raw = df_param_raw.set_index("Measured value from")
-        series_aligned = df_param_raw["Measured value"].reindex(unified_timestamps)
+        # convert downsampled timestamps to numeric
+        t_ds_numeric = t_ds.astype("datetime64[ns]").astype(float)
 
-        cols[param] = series_aligned
+        # linear interpolation BUT outside bounds → NaN
+        v_interp = np.interp(
+            unified_numeric,
+            t_ds_numeric,
+            v_ds,
+            left=np.nan,
+            right=np.nan
+        )
 
-    if not cols:
-        return aligned_pivot
+        cols[param] = v_interp
 
-    aligned_pivot = pd.DataFrame(cols)
-    # ensure datetime index
-    aligned_pivot.index = pd.to_datetime(aligned_pivot.index)
+    # -----------------------------------------------------------
+    # 4) BUILD FINAL PIVOT
+    # -----------------------------------------------------------
+    aligned_pivot = pd.DataFrame(
+        cols,
+        index=pd.to_datetime(unified_timestamps)
+    )
 
     return aligned_pivot
 
@@ -676,38 +705,8 @@ filtered_pivot = apply_filters_to_pivot(
 )
 
 # ============================================================
-# COMPUTE PLOT-POINT STATS (points actually used for plotting)
+# SETZE pivot_df_clean (ohne plot_stats und Downsampling-Übersicht)
 # ============================================================
-plot_stats = {}
-
-for param in applied_parameters:
-    if param not in filtered_pivot.columns:
-        continue
-
-    series = filtered_pivot[param]
-
-    # Convert to DataFrame (same as plotting code)
-    plot_df = series.to_frame(name="Measured value").reset_index()
-    plot_df = plot_df.rename(columns={"index": "Measured value from"})
-    plot_df.index.name = None
-
-    # Apply gap detection (same logic as in plots)
-    plot_df = plot_df.sort_values("Measured value from")
-    plot_df["time_diff"] = plot_df["Measured value from"].diff()
-    plot_df.loc[plot_df["time_diff"] > gap_threshold, "Measured value"] = np.nan
-    plot_df = plot_df.drop(columns=["time_diff"])
-
-    # Count visible points (non-NaN)
-    visible_points = plot_df["Measured value"].count()
-
-    # Full timeline length (including NaNs)
-    total_index_points = len(plot_df)
-
-    plot_stats[param] = {
-        "visible": visible_points,
-        "index_len": total_index_points,
-    }
-
 pivot_df_clean = filtered_pivot  # used by analysis tabs
 
 if not filtered_pivot.empty:
@@ -721,6 +720,17 @@ else:
         start_time_final = data["Measured value from"].min()
         end_time_final = data["Measured value from"].max()
 
+# ============================================================
+# ACTIVE FILTER SUMMARY
+# ============================================================
+st.markdown(
+    f"""
+**Aktive Filter**  
+Parameter: `{', '.join(applied_parameters) if applied_parameters else 'Alle'}`  
+Datenzeitraum (nach Filtern): `{start_time_final}` → `{end_time_final}`  
+Wöchentliches Zeitfenster: `{"An" if enable_weekly_window else "Aus"}`
+"""
+)
 
 # ============================================================
 # 11) TABS
