@@ -111,8 +111,9 @@ def load_data(uploaded_files, mode):
                     uploaded_file,
                     sep=";",
                     decimal=",",
-                    encoding="utf-8-sig",
-                    usecols=sps_cols,
+                    encoding="latin1",   # safest and cannot fail decoding
+                    usecols=[0, 1, 2],   # VarName, TimeString, VarValue
+                    header=0,
                 )
             except UnicodeDecodeError:
                 df = pd.read_csv(
@@ -1012,4 +1013,5 @@ if advanced_mode:
 
         else:
             st.info("Nicht genügend Daten.")
+
 
