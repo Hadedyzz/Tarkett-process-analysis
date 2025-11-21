@@ -21,7 +21,6 @@ if "include_windows" not in st.session_state:
 if "exclude_windows" not in st.session_state:
     st.session_state.exclude_windows = []
 
-
 # ============================================================
 # 2) DATA SOURCE TOGGLE (HYDRA / SPS)
 # ============================================================
@@ -32,7 +31,6 @@ data_mode = st.radio(
 )
 
 st.title(f"Process Parameter Analysis ({data_mode} Data)")
-
 
 # ============================================================
 # 3) DATA LOADING & CORE HELPERS
@@ -99,7 +97,6 @@ def filter_data(data, parameters, start, end):
     mask_param = data["Characteristic designation"].isin(parameters)
     return data[mask_param & mask_time]
 
-
 @st.cache_data
 def get_pivot_table(filtered_data: pd.DataFrame) -> pd.DataFrame:
     """Pivot for scatter / correlation / PCA etc."""
@@ -114,7 +111,6 @@ def get_pivot_table(filtered_data: pd.DataFrame) -> pd.DataFrame:
         columns="Characteristic designation",
         values="Measured value"
     )
-
 
 @st.cache_data
 def build_param_timeseries(
@@ -272,7 +268,6 @@ def build_param_timeseries(
 
     return result
 
-
 # ============================================================
 # 4) SIDEBAR – FILE UPLOAD
 # ============================================================
@@ -285,7 +280,6 @@ uploaded_files = st.file_uploader(
 if not uploaded_files:
     st.info("Please upload at least one CSV file to begin.")
     st.stop()
-
 
 # ============================================================
 # 5) LOAD DATA & BASIC FILTER OPTIONS
@@ -301,7 +295,6 @@ selected_parameters = st.sidebar.multiselect(
     options=all_parameters,
     default=[]
 )
-
 
 # ============================================================
 # 6) SIMPLE OPTIONAL TIME FILTER SYSTEM
@@ -350,7 +343,6 @@ if enable_time_filter:
                 st.session_state.exclude_windows.pop(i)
                 st.experimental_rerun()
 
-
 # ============================================================
 # 7) WEEKLY WINDOW FILTER
 # ============================================================
@@ -378,11 +370,9 @@ if enable_weekly_window:
         datetime.strptime("05:00", "%H:%M").time()
     )
 
-
 # Advanced mode toggle
 st.sidebar.markdown("---")
 advanced_mode = st.sidebar.checkbox("Enable Advanced Analysis Mode", value=False)
-
 
 # ============================================================
 # 8) APPLY TIME-WINDOW LOGIC
@@ -447,7 +437,6 @@ if enable_weekly_window:
         filtered_data = filtered_data[(ts_f >= start_f) |
                                       (ts_f <= end_f)]
 
-
 # ============================================================
 # 9) BUILD PIVOT TABLE + TIMESERIES
 # ============================================================
@@ -468,22 +457,21 @@ param_timeseries = build_param_timeseries(
     spike_threshold_factor=2.0
 )
 
-
 # ============================================================
 # TABS
 # ============================================================
 if advanced_mode:
     tab_names = [
         "Interactive Time Series", "Interactive Timeline",
-        "Scatter Plot", "Pair Plot",
-        "Correlation Analysis", "Distribution Plots",
+        "Scatter Plot", "Distribution Plots",
+        "Correlation Analysis", "Pair Plot",
         "Time-Shifted Correlation", "PCA",
         "Outlier Analysis"
     ]
 else:
     tab_names = [
         "Interactive Time Series", "Interactive Timeline",
-        "Scatter Plot", "Pair Plot"
+        "Scatter Plot", "Distribution Plots"
     ]
 
 tabs = st.tabs(tab_names)
@@ -609,19 +597,18 @@ with tabs[2]:
 
 
 # ============================================================
-# TAB 3 — Pair Plot
+# TAB 3 — Distribution Plot
 # ============================================================
 with tabs[3]:
-    st.subheader("Pair Plot")
+    st.subheader("Distribution Plots")
     if not pivot_df_clean.empty:
-        try:
-            sns_plot = sns.pairplot(pivot_df_clean.dropna())
-            st.pyplot(sns_plot)
-        except Exception as e:
-            st.error(f"Pair plot error: {e}")
+        for param in selected_parameters:
+            if param in pivot_df_clean:
+                fig, ax = plt.subplots(figsize=(10, 6))
+                sns.histplot(pivot_df_clean[param].dropna(), kde=True, ax=ax)
+                st.pyplot(fig)
     else:
         st.info("Not enough data.")
-
 
 # ============================================================
 # ADVANCED MODE
@@ -639,15 +626,17 @@ if advanced_mode:
         else:
             st.info("Not enough data.")
 
-    # ---------------- DISTRIBUTIONS ----------------
+    # ---------------- Pair Plot ----------------
     with tabs[5]:
-        st.subheader("Distribution Plots")
+        st.subheader("Pair Plot")
         if not pivot_df_clean.empty:
-            for param in selected_parameters:
-                if param in pivot_df_clean:
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    sns.histplot(pivot_df_clean[param].dropna(), kde=True, ax=ax)
-                    st.pyplot(fig)
+            try:
+                num_params = len(pivot_df_clean.columns)
+                height = max(1.2, min(2.5, 20/num_params))
+                sns_plot = sns.pairplot(pivot_df_clean.dropna(), height=height)
+                st.pyplot(sns_plot)
+            except Exception as e:
+                st.error(f"Pair plot error: {e}")
         else:
             st.info("Not enough data.")
 
