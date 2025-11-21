@@ -104,14 +104,25 @@ def load_data(uploaded_files, mode):
         # ---------------------------------------------------------
         else:  # mode == "SPS"
             sps_cols = ["VarName", "VarValue", "TimeString"]
-
-            df = pd.read_csv(
-                uploaded_file,
-                sep=";",
-                decimal=",",
-                encoding="cp1252",
-                usecols=sps_cols,   # read only these columns
-            )
+        
+            # Load CSV with robust fallback encodings
+            try:
+                df = pd.read_csv(
+                    uploaded_file,
+                    sep=";",
+                    decimal=",",
+                    encoding="utf-8-sig",
+                    usecols=sps_cols,
+                )
+            except UnicodeDecodeError:
+                df = pd.read_csv(
+                    uploaded_file,
+                    sep=";",
+                    decimal=",",
+                    encoding="cp1252",
+                    usecols=sps_cols,
+                )
+        
             # SPS renaming
             df = df.rename(columns={
                 "VarName": "Characteristic designation",
@@ -1001,3 +1012,4 @@ if advanced_mode:
 
         else:
             st.info("Nicht genügend Daten.")
+
